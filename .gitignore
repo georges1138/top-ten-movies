@@ -1,0 +1,15 @@
+
+# PyCharm project settings
+.idea/
+
+# Local SQLite databases
+*.db
+
+# Environment variables and secrets
+.env
+
+# Python virtual environments
+.venv/
+
+# Python bytecode cache
+__pycache__/
