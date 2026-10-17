@@ -7,14 +7,14 @@ from wtforms.validators import DataRequired
 import requests
 import os
 
-MOVIE_API_KEY = "9bc02ef7a56cd429d954413db856c596"
+MOVIE_API_KEY = os.environ["TMDB_API_KEY"]
 MOVIE_SITE_URL = "https://api.themoviedb.org/3/search/movie"
 MOVIE_DETAIL_SITE_URL = "https://api.themoviedb.org/3/movie"
 MOVIE_POSTER_SITE_URL = "https://image.tmdb.org/t/p/w500"
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///top-ten-movies.db'
-app.config['SECRET_KEY'] = '8BYkEfBA6O6donzWlSihBXox7C0sKR6b'
+app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 Bootstrap(app)
 
@@ -44,6 +44,10 @@ class Movie(db.Model):
 
     def __repr__(self):
         return '<Movie %r>' % self.title
+
+
+with app.app_context():
+    db.create_all()
 
 
 all_movies = []
@@ -145,7 +149,6 @@ def movie_search_request(mname) -> list:
         'query': mname,
     }
     response = requests.get(url=MOVIE_SITE_URL, params=payload)
-    print(response.url)
     response.raise_for_status()
     result = response.json()
     print(result['total_results'])
@@ -160,7 +163,6 @@ def movie_detail_request(m_id):
     MOVIE_URL = f"{MOVIE_DETAIL_SITE_URL}/{m_id}"
     print(MOVIE_URL)
     response = requests.get(url=MOVIE_URL, params=payload)
-    print(response.url)
     response.raise_for_status()
     result = response.json()
     print(type(result))
@@ -169,4 +171,4 @@ def movie_detail_request(m_id):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=os.environ.get("FLASK_DEBUG") == "1")
