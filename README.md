@@ -34,16 +34,12 @@ modernization.
 
 Clone the repository and open a terminal in the project directory.
 
-Create a Python 3.13 virtual environment:
+
+Create the project's virtual environment and install
+dependencies using the lockfile:
 
 ```powershell
-uv venv --python 3.13 .venv
-```
-
-Install the existing dependencies:
-
-```powershell
-uv pip install -r requirements.txt
+uv sync --locked
 ```
 
 Configure the required environment variables:
@@ -59,7 +55,7 @@ $env:FLASK_DEBUG = "0"
 Start the application:
 
 ```powershell
-.\.venv\Scripts\python.exe main.py
+uv run main.py
 ```
 
 Open http://127.0.0.1:5000/ in your browser.
