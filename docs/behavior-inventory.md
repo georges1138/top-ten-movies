@@ -87,7 +87,7 @@
 
 **Long descriptions:** Six exceed 250 characters; maximum 449. The reviewer confirmed the earlier count of four was **the reviewer's counting error** (The Avengers and Short Circuit were omitted). Discrepancy closed by reviewer feedback.
 
-**Migration acceptance:** Preserve all ten local IDs and all existing values, including Unicode and complete descriptions; use a *copy* for testing. New columns (such as `tmdb_id`, `original_title`, `created_at`) must support legacy records without inventing external IDs. Compare values rather than expecting byte-identical SQLite files after migration.
+**Migration acceptance:** Preserve all ten local IDs and original field values (including Unicode and full descriptions) in an isolated copy. Look up and independently verify the real TMDB ID of each legacy film; do not guess ambiguous matches, and stop before enforcing `NOT NULL UNIQUE` until all ten matches are confirmed. Backfill `created_at` deterministically; reset the PostgreSQL ID sequence after importing original IDs (e.g., `setval`) and test that the next insert cannot collide. Compare data values, not byte-identical database files.
 
 ## 4. Unified audit findings and proposed regression tests
 
@@ -104,6 +104,8 @@ Every row has a **canonical ID**. Older D-* IDs are mapped in the `Previous ID` 
 | SEC-05 | — | TMDB key sent as URL `api_key` parameter; may appear in HTTPError/URL logs (S) | Needs fix | test_tmdb_uses_authorization_header_and_redacts_errors |
 | SEC-06 | — | No timeout on either outbound `requests.get()` (S) | Needs fix | test_tmdb_requests_have_timeout |
 | SEC-07 | — | Prior audit found 38 dependency vulnerabilities across seven packages; change records 0 (G: `7791b08`) | Fixed `7791b08` | check_dependency_audit_clean |
+| SEC-08 | — | Original repository tracked local `.db` and `.idea/` files; tracking removed (G: `16099c8`) | Fixed `16099c8` | check_git_tracks_no_local_db_or_ide_files |
+
 ### Correctness
 
 | ID | Previous ID | Finding / compact evidence | Status | Proposed test or check |
@@ -119,11 +121,13 @@ Every row has a **canonical ID**. Older D-* IDs are mapped in the `Previous ID` 
 | BUG-09 | — | `GET /edit` nonexistent ID returns 200 and placeholder form (R) | Needs fix | test_edit_missing_movie_returns_404 |
 | BUG-10 | — | `POST /edit?id=9999` returns 500 (R) | Needs fix | test_edit_post_missing_movie_returns_404 |
 | BUG-11 | — | TMDB `original_title` used as display title; Parasite appears as 기생충 (S, DB) | Needs fix | test_import_keeps_display_and_original_titles |
-| BUG-12 | — | TMDB tagline is inserted as the user’s review (S) | Needs fix | test_import_review_defaults_to_null |
+| BUG-12 | — | TMDB tagline is inserted as the user's review (S) | Needs fix | test_import_review_defaults_to_null |
 | BUG-13 | — | TMDB `vote_average` pre-fills personal rating, potentially 0 (S) | Needs fix | test_import_rating_defaults_to_null |
 | BUG-14 | — | Edit page shows hard-coded `Movie Title` heading (S) | Needs fix | test_edit_page_shows_movie_title |
 | BUG-15 | — | No helpful message for zero TMDB search results (T) | Needs fix | test_empty_search_shows_message |
 | BUG-16 | — | No ten-item display limit or explicit tie rule in legacy ranking (S) | Design | test_top_ten_sort_ties_and_unrated |
+| BUG-17 | — | Edit form does not prefill saved rating and review (S: `/edit`, template) | Needs fix | test_edit_form_prefills_current_values |
+
 ### Data and TMDB normalization
 
 | ID | Previous ID | Finding / compact evidence | Status | Proposed test or check |
@@ -139,7 +143,8 @@ Every row has a **canonical ID**. Older D-* IDs are mapped in the `Previous ID` 
 | DATA-09 | D-S13 | Null overview causes IntegrityError and HTTP 500 (T, R) | Needs fix | test_null_overview_allowed |
 | DATA-10 | — | Legacy poster base/path join produces double slash (`w500//...`) (DB/R) | Needs fix | test_poster_url_has_single_separator |
 | DATA-11 | — | Stored `ranking` always 10; displayed ranking recalculated (DB, S) | Design | test_rank_is_derived_not_stored |
-| DATA-12 | — | Six descriptions exceed declared VARCHAR(250), max 449 (DB; reviewer confirmed) | Design | test_migration_preserves_long_descriptions |
+| DATA-12 | — | Six descriptions exceed `VARCHAR(250)` (max 449); `img_url` is declared `VARCHAR(80)` and must preserve existing URLs (DB) | Design | test_migration_preserves_long_descriptions_and_poster_urls |
+
 ### Maintainability
 
 | ID | Previous ID | Finding / compact evidence | Status | Proposed test or check |
@@ -147,11 +152,15 @@ Every row has a **canonical ID**. Older D-* IDs are mapped in the `Previous ID` 
 | MNT-01 | — | Global `all_movies` is mutated during GET `/` (S) | Needs fix | test_homepage_does_not_mutate_shared_state |
 | MNT-02 | — | Routes and TMDB helpers use `print()` debugging (S) | Needs fix | test_sensitive_data_not_logged |
 | MNT-03 | — | Legacy `flask_bootstrap.Bootstrap` uses old Bootstrap 3 UI (S; reviewer audit) | Design | test_pages_render_without_flask_bootstrap |
+| MNT-04 | — | Historical fresh-clone database initialization failure without `db.create_all()`; startup creation added (G: `cfa7f8b`) | Fixed `cfa7f8b` | test_fresh_database_created_by_migrations |
+
 ### Completeness and duplicate-control notes
 
 - Original defect crosswalk: `D-R01–D-R02` → BUG-01–02; `D-T01` → BUG-03; `D-S01–D-S04` → BUG-04–07; `D-S05–D-S13` → DATA-01–09. All 16 original IDs occur **once** in the Previous ID column.
 - Authentication is SEC-01; unsafe GET mutations and missing CSRF protections are combined under SEC-02 to avoid duplicate IDs for the same route-level exposure.
-- This register integrates the reviewer's listed missing items plus source/database findings. **Original audit-list cross-check required before reviewer sign-off:** compare against the original audit issue list to certify that every original audit item and all five later findings map to exactly one ID; the original issue list was not separately provided with this draft.
+- **Original audit crosswalk (reviewer-confirmed):** 1→SEC-03; 2→SEC-07; 3→SEC-01; 4→SEC-02; 5→SEC-08; 6→BUG-08, BUG-10, BUG-04, BUG-05; 7→BUG-07; 8→DATA-12; 9→BUG-11; 10→DATA-10, DATA-05, DATA-02; 11→SEC-06, BUG-03, SEC-05; 12a→BUG-01, BUG-02; 12b→BUG-14; 12c→BUG-17; 12d→BUG-16; 13→MNT-01, MNT-02, MNT-03.
+- **Five later audit findings (reviewer-confirmed):** rating-zero behavior→BUG-02; unused ranking→DATA-11; absent startup `db.create_all()`→MNT-04; former `debug=True`→SEC-04; original title/long descriptions/tagline→BUG-11, DATA-12, BUG-12. Additional key-in-error-text exposure→SEC-05.
+- Some audit items legitimately map to several IDs because they bundled separate problems. Coverage means every issue is represented, each ID describes a coherent issue, and no single problem is double-counted. The reviewer supplied this crosswalk in feedback on PR #1.
 - Replayer attribution: reviewer independently confirmed rating 0, 0.5, -2, 11; duplicate insert; null overview; null poster; missing overview HTTP 500; and invalid edit GET/POST behaviors. These are reviewer-reported reproductions, not new tests performed by this document's author.
 
 ## 5. Target decisions and acceptance rules
@@ -164,11 +173,11 @@ These are **Decided** target requirements approved by George, including the revi
 | DEC-02 | Decided | Use POST (or DELETE for an API) for add/delete and POST/PATCH for edit | Correct HTTP semantics; no DB writes during GET |
 | DEC-03 | Decided | Use TMDB bearer authorization in a header; configure secrets from environment; disable production debug | Prevent query-string credential exposure; redact errors/logs |
 | DEC-04 | Decided | Apply TMDB timeouts, controlled upstream error handling, and no secret-bearing error messages | External failures never become unhandled 500s |
-| DEC-05 | Decided | Movie requires a local `id`, unique `tmdb_id` required for new TMDB imports (NULL allowed for original legacy rows), and display `title`; retain `original_title` | Preserve original records and both localized/display and original titles |
+| DEC-05 | Decided | Every target movie has a local `id`, `title`, `original_title`, and verified `tmdb_id NOT NULL UNIQUE`; match and backfill all ten legacy TMDB IDs during isolated migration before enforcing this constraint | Preserve original local IDs and titles; verify TMDB matches against each movie, never invent IDs; stop migration if any match is ambiguous or unavailable |
 | DEC-06 | Decided | `year` is nullable integer; `overview` is nullable Text; `poster_path` is nullable; absent values map to NULL; render year `—` and optional placeholders | Permit legitimate movies with incomplete TMDB data without storing invalid strings/URLs |
 | DEC-07 | Decided | `rating` and `review` start as NULL on TMDB import; never copy TMDB `vote_average` or tagline into personal fields; entered rating must be 1–10 inclusive | Separate external metadata from a user's rating/review; range is our target rule, not proven legacy validation |
 | DEC-08 | Decided | Store unlimited saved movies; **display only top 10**, ordered rated first (`rating` DESC), then `created_at` ASC for ties; unrated last | Ensure `created_at` is populated/backfilled deterministically for legacy rows |
-| DEC-09 | Decided | Compute rank at query/render time, do not rely on legacy `ranking`; handle duplicates using unique `tmdb_id` plus DB constraints | Avoid stale rank values and uncontrolled IntegrityError; define behavior for legacy rows without TMDB IDs |
+| DEC-09 | Decided | Compute rank when querying/rendering; enforce `tmdb_id NOT NULL UNIQUE` after verified legacy backfill, and return controlled duplicate feedback for existing TMDB IDs | All ten legacy rows must have verified TMDB IDs before enforcement, so imported duplicates cannot bypass the constraint through NULL IDs |
 | DEC-10 | Decided | Preserve all ten existing records, Unicode, IDs, and complete descriptions; test on isolated DB and mock TMDB | Do not truncate or overwrite source data; regression tests cover each audit row and core workflow |
 
-**Completion gate:** Every canonical finding has an outcome (fixed with evidence or addressed by a passing FastAPI test), original audit ID coverage is reviewed, core route tests and migration checks pass, and reviewer accepts this checklist. No FastAPI implementation, migration, or regression-test execution is claimed here.
+**Completion gate:** All 41 unique canonical IDs cover the reviewer-confirmed crosswalk; every canonical finding has an outcome (fixed with evidence or addressed by a passing FastAPI test), original audit ID coverage is reviewed, core route tests and migration checks pass, and reviewer accepts this checklist. No FastAPI implementation, migration, or regression-test execution is claimed here.
