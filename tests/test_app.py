@@ -20,9 +20,7 @@ def test_health_returns_200():
     assert response.json() == {"status": "ok"}
 
 
-def test_missing_secret_rejected_at_startup(
-    monkeypatch, tmp_path
-):
+def test_missing_secret_rejected_at_startup(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.setenv("TMDB_READ_TOKEN", "fake-test-token")
@@ -33,9 +31,7 @@ def test_missing_secret_rejected_at_startup(
 
 
 @pytest.mark.parametrize("invalid_secret", ["", "too-short"])
-def test_invalid_secret_rejected_at_startup(
-    monkeypatch, tmp_path, invalid_secret
-):
+def test_invalid_secret_rejected_at_startup(monkeypatch, tmp_path, invalid_secret):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SECRET_KEY", invalid_secret)
     monkeypatch.setenv("TMDB_READ_TOKEN", "fake-test-token")

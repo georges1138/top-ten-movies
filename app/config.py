@@ -16,18 +16,12 @@ class Settings(BaseSettings):
     @classmethod
     def validate_secret_key(cls, value: SecretStr) -> SecretStr:
         if len(value.get_secret_value()) < 32:
-            raise ValueError(
-                "SECRET_KEY must contain at least 32 characters"
-            )
+            raise ValueError("SECRET_KEY must contain at least 32 characters")
         return value
 
     @field_validator("tmdb_read_token")
     @classmethod
-    def validate_tmdb_read_token(
-        cls, value: SecretStr
-    ) -> SecretStr:
+    def validate_tmdb_read_token(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().strip():
-            raise ValueError(
-                "TMDB_READ_TOKEN must not be empty"
-            )
+            raise ValueError("TMDB_READ_TOKEN must not be empty")
         return value
