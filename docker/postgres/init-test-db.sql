@@ -1,0 +1,1 @@
+CREATE DATABASE movies_test OWNER movie_user;

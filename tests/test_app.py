@@ -10,6 +10,7 @@ def test_health_returns_200():
     settings = Settings(
         secret_key="a" * 32,
         tmdb_read_token="fake-test-token",
+        database_url="postgresql+psycopg://test:test@localhost:5432/test_movies",
         _env_file=None,
     )
 
@@ -24,6 +25,10 @@ def test_missing_secret_rejected_at_startup(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("SECRET_KEY", raising=False)
     monkeypatch.setenv("TMDB_READ_TOKEN", "fake-test-token")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://test:test@localhost:5432/test_movies",
+    )
 
     with pytest.raises(ValidationError) as exc_info:
         with TestClient(create_app()):
@@ -37,6 +42,10 @@ def test_invalid_secret_rejected_at_startup(monkeypatch, tmp_path, invalid_secre
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SECRET_KEY", invalid_secret)
     monkeypatch.setenv("TMDB_READ_TOKEN", "fake-test-token")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://test:test@localhost:5432/test_movies",
+    )
 
     with pytest.raises(ValidationError) as exc_info:
         with TestClient(create_app()):
@@ -51,6 +60,7 @@ def test_settings_repr_hides_secrets():
     settings = Settings(
         secret_key=secret,
         tmdb_read_token=token,
+        database_url="postgresql+psycopg://test:test@localhost:5432/test_movies",
         _env_file=None,
     )
 
@@ -69,6 +79,10 @@ def test_settings_repr_hides_secrets():
 def test_invalid_tmdb_token_rejected(monkeypatch, tmp_path, invalid_token):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SECRET_KEY", "a" * 32)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://test:test@localhost:5432/test_movies",
+    )
 
     if invalid_token is None:
         monkeypatch.delenv("TMDB_READ_TOKEN", raising=False)

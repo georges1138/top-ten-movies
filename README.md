@@ -85,6 +85,57 @@ The new application requires:
 Create a local `.env` file using `.env.example` as a starting point.
 Keep actual credentials out of Git.
 
+### Local PostgreSQL setup
+
+The FastAPI application uses PostgreSQL 18 with asynchronous SQLAlchemy. Docker Compose provides a local database server.
+
+**Requirements:** Docker Desktop (with Docker Compose), Python 3.13, and `uv`.
+
+1. Copy `.env.example` to `.env` and configure `SECRET_KEY`, `TMDB_READ_TOKEN`, `POSTGRES_PASSWORD`, and `DATABASE_URL`.
+
+   Use a PostgreSQL connection URL in this format:
+
+   `postgresql+psycopg://movie_user:<your-password>@localhost:5432/movies`
+
+   The password in `DATABASE_URL` must match `POSTGRES_PASSWORD`. Keep `.env` out of Git.
+
+2. Start PostgreSQL from the repository root:
+
+   ```powershell
+   docker compose up -d db
+   ```
+
+   On a fresh PostgreSQL volume, `docker/postgres/init-test-db.sql` creates the separate `movies_test` database.
+
+3. Apply the Alembic migrations to the development database:
+
+   ```powershell
+   uv run alembic upgrade head
+   ```
+
+4. To run database tests, change `DATABASE_URL` in your local `.env` to point to `movies_test` instead of `movies`, then run:
+
+   ```powershell
+   uv run alembic upgrade head
+   uv run pytest -q
+   ```
+
+   Database integration tests require the database name to be exactly `movies_test`. The test guard rejects other database names to protect development data.
+
+5. Optionally check that the SQLAlchemy models match the database schema:
+
+   ```powershell
+   uv run alembic check
+   ```
+
+**Existing Docker volume:** Initialization scripts only execute when PostgreSQL initializes a new, empty data directory. If you already have a PostgreSQL volume without `movies_test`, create that database manually using:
+
+```powershell
+docker compose exec -T db psql -U movie_user -d movies -c "CREATE DATABASE movies_test OWNER movie_user;"
+```
+
+Run this manual creation command only if `movies_test` does not already exist. Do not delete your Docker volume to rerun initialization.
+
 Install the locked dependencies:
 
 ```powershell
@@ -107,8 +158,13 @@ Expected response:
 {"status": "ok"}
 ```
 
-The FastAPI application currently provides a health check and
-configuration validation. Movie routes and database integration
+The FastAPI application currently provides a health check,
+configuration validation, and a PostgreSQL-backed Movie data layer
+using asynchronous SQLAlchemy and Alembic migrations.
+
+The Movie service supports adding, retrieving, updating ratings
+and reviews, deleting, and listing the top ten movies. HTTP movie
+routes and full feature parity with the legacy Flask application
 are planned for later milestones.
 
 Run the automated checks:

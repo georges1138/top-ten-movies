@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     secret_key: SecretStr
     tmdb_read_token: SecretStr
     debug: bool = False
+    database_url: str
 
     @field_validator("secret_key")
     @classmethod

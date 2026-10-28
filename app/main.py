@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import Settings
+from app.db import make_engine, make_session_factory
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -15,7 +16,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.settings = settings if settings is not None else Settings()
-        yield
+        app.state.engine = make_engine(app.state.settings.database_url)
+        app.state.session_factory = make_session_factory(app.state.engine)
+        try:
+            yield
+        finally:
+            await app.state.engine.dispose()
 
     app = FastAPI(
         title="Top Ten Movies",
