@@ -14,6 +14,25 @@ jobs:
   tests:
     runs-on: ubuntu-latest
 
+    env:
+      SECRET_KEY: "ci-only-placeholder-secret-key-123456"
+      TMDB_READ_TOKEN: "ci-fake-test-token"
+      DATABASE_URL: "postgresql+psycopg://movie_user:ci_test_password@127.0.0.1:5432/movies_test"
+      POSTGRES_PASSWORD: "ci_test_password"
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: movies_test
+          POSTGRES_USER: movie_user
+          POSTGRES_PASSWORD: ci_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U movie_user -d movies_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -33,6 +52,18 @@ jobs:
 
       - name: Check Python formatting
         run: uv run ruff format --check app/ tests/
+
+      - name: Apply database migrations
+        run: uv run alembic upgrade head
+
+      - name: Check for model and migration drift
+        run: uv run alembic check
+
+      - name: Downgrade database migrations
+        run: uv run alembic downgrade base
+
+      - name: Reapply database migrations
+        run: uv run alembic upgrade head
 
       - name: Run tests
         run: uv run pytest
