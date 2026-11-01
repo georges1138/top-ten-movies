@@ -11,7 +11,7 @@ from app.models import Movie
 
 
 @pytest.mark.asyncio
-async def test_rating_outside_range_is_rejected():
+async def test_rating_outside_range_is_rejected(test_database_guard):
     settings = Settings()
     engine = make_engine(settings.database_url)
     try:
@@ -35,7 +35,9 @@ async def test_rating_outside_range_is_rejected():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_rating", [Decimal("0.9"), Decimal("10.1")])
-async def test_decimal_rating_outside_range_is_rejected(invalid_rating):
+async def test_decimal_rating_outside_range_is_rejected(
+    invalid_rating, test_database_guard
+):
     settings = Settings()
     engine = make_engine(settings.database_url)
 
@@ -62,7 +64,7 @@ async def test_decimal_rating_outside_range_is_rejected(invalid_rating):
 
 
 @pytest.mark.asyncio
-async def test_duplicate_tmdb_id_is_rejected():
+async def test_duplicate_tmdb_id_is_rejected(test_database_guard):
     settings = Settings()
     engine = make_engine(settings.database_url)
 
@@ -96,7 +98,7 @@ async def test_duplicate_tmdb_id_is_rejected():
 
 
 @pytest.mark.asyncio
-async def test_decimal_rating_round_trips_exactly():
+async def test_decimal_rating_round_trips_exactly(test_database_guard):
     settings = Settings()
     engine = make_engine(settings.database_url)
 

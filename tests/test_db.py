@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from app.config import Settings
 from app.db import make_engine, make_session_factory
 from app.main import create_app
+from tests.conftest import require_test_database
 
 
 @pytest.mark.asyncio
@@ -52,3 +53,19 @@ def test_lifespan_disposes_engine():
             assert client.get("/healthz").status_code == 200
 
         mock_engine.dispose.assert_awaited_once()
+
+
+def test_database_guard_rejects_development_database():
+    settings = Settings(
+        secret_key="a" * 32,
+        tmdb_read_token="fake-test-token",
+        database_url="postgresql+psycopg://test:test@localhost:5432/movies",
+        _env_file=None,
+    )
+
+    with patch("tests.conftest.Settings", return_value=settings):
+        with pytest.raises(
+            RuntimeError,
+            match="Database integration tests require the movies_test database",
+        ):
+            require_test_database()
