@@ -14,7 +14,7 @@ class Movie(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    tmdb_id: Mapped[int] = mapped_column(unique=True, nullable=False)
+    tmdb_id: Mapped[int] = mapped_column(nullable=False)
     title: Mapped[str] = mapped_column(nullable=False)
     original_title: Mapped[str] = mapped_column(nullable=False)
     year: Mapped[int | None] = mapped_column(nullable=True)
