@@ -125,6 +125,31 @@ def validate_import_database(database_url: str) -> str:
     return database_name
 
 
+def validate_mapping(legacy_rows, mapping_rows):
+    legacy_ids = {row["id"] for row in legacy_rows}
+    mapping_ids = [int(row["legacy_id"]) for row in mapping_rows]
+    tmdb_ids = [int(row["tmdb_id"]) for row in mapping_rows]
+
+    if len(mapping_ids) != len(set(mapping_ids)):
+        raise ValueError("Duplicate legacy_id found in CSV")
+
+    if set(mapping_ids) != legacy_ids:
+        raise ValueError("CSV mappings do not match SQLite movie IDs")
+
+    if len(tmdb_ids) != len(set(tmdb_ids)):
+        raise ValueError("Duplicate tmdb_id found in CSV")
+
+    legacy_titles = {row["id"]: row["title"] for row in legacy_rows}
+
+    for row in mapping_rows:
+        legacy_id = int(row["legacy_id"])
+
+        if row["original_title"] != legacy_titles[legacy_id]:
+            raise ValueError(f"Original title mismatch for legacy ID {legacy_id}")
+
+    return {int(row["legacy_id"]): row for row in mapping_rows}
+
+
 def confirm_import_database(database_url: str, confirmation: str) -> str:
     database_name = validate_import_database(database_url)
 
@@ -169,9 +194,6 @@ def main() -> None:
 
     with closing(sqlite3.connect(sqlite_uri, uri=True)) as connection:
         connection.row_factory = sqlite3.Row
-        count = connection.execute("SELECT COUNT(*) FROM movie").fetchone()[0]
-        legacy_ids = [row[0] for row in connection.execute("SELECT id FROM movie")]
-        legacy_titles = dict(connection.execute("SELECT id, title FROM movie"))
         legacy_rows = connection.execute(
             """
             SELECT id, title, year, description, rating, review, img_url
@@ -184,48 +206,15 @@ def main() -> None:
 
     with mapping_path.open(newline="", encoding="utf-8") as file:
         mapping_rows = list(csv.DictReader(file))
-    mapping_ids = [int(row["legacy_id"]) for row in mapping_rows]
 
-    tmdb_ids = [int(row["tmdb_id"]) for row in mapping_rows]
-
-    if len(mapping_ids) != len(set(mapping_ids)):
-        raise ValueError("Duplicate legacy_id found in CSV")
-
-    if set(mapping_ids) != set(legacy_ids):
-        raise ValueError("CSV mappings do not match SQLite movie IDs")
-
-    if len(tmdb_ids) != len(set(tmdb_ids)):
-        raise ValueError("Duplicate tmdb_id found in CSV")
-    print("Validation passed: TMDB IDs are unique.")
-
-    for row in mapping_rows:
-        legacy_id = int(row["legacy_id"])
-
-        if row["original_title"] != legacy_titles[legacy_id]:
-            raise ValueError(f"Original title mismatch for legacy ID {legacy_id}")
-
-    mapping_by_id = {int(row["legacy_id"]): row for row in mapping_rows}
+    try:
+        mapping_by_id = validate_mapping(legacy_rows, mapping_rows)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     print("Validation passed: original titles match SQLite.")
     print("Validation passed: every SQLite movie has exactly one mapping.")
     print(f"Ready to transform {len(legacy_rows)} SQLite records.")
-
-    first_movie = legacy_rows[0]
-    print(
-        f"First movie: ID={first_movie['id']}, "
-        f"title={first_movie['title']}, "
-        f"year={first_movie['year']}"
-    )
-
-    poster_path = extract_poster_path(first_movie["img_url"])
-    print(f"First movie poster path: {poster_path}")
-
-    raw_rating = first_movie["rating"]
-
-    rating = Decimal(str(raw_rating)) if raw_rating is not None else None
-
-    print(f"First movie rating: {rating}")
-    print(f"Rating Python type: {type(rating).__name__}")
 
     print("Matched movies:")
 
@@ -246,22 +235,13 @@ def main() -> None:
 
     print(f"Prepared {len(prepared_movies)} movie identities (preview only).")
 
-    for record in prepared_movies:
-        if record["id"] == 7:
-            print(f"Parasite preview: {record}")
+    longest_overview = max(
+        (len(record["overview"] or "") for record in prepared_movies),
+        default=0,
+    )
 
-    longest_overview = max(len(record["overview"] or "") for record in prepared_movies)
-
-    matrix = prepared_movies[0]
-
-    print(f"Matrix prepared rating: {matrix['rating']}")
-    print(f"Matrix rating type: {type(matrix['rating']).__name__}")
-    print(f"Matrix prepared poster: {matrix['poster_path']}")
-    print(f"First timestamp: {prepared_movies[0]['created_at'].isoformat()}")
-    print(f"Last timestamp: {prepared_movies[-1]['created_at'].isoformat()}")
     print(f"Longest prepared overview: {longest_overview} characters")
-    print(f"Found {count} legacy movies (read-only; nothing imported).")
-    print(f"Loaded {len(mapping_rows)} verified TMDB mappings.")
+    print("Dry run complete: no movies imported.")
 
 
 if __name__ == "__main__":

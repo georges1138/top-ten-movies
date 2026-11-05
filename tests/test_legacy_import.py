@@ -569,3 +569,265 @@ def test_cli_correct_confirmation_still_blocks_execution(monkeypatch, capsys):
 
     assert exc_info.value.code == 2
     assert "PostgreSQL import execution is not yet enabled" in capsys.readouterr().err
+
+
+def test_validate_mapping_rejects_missing_legacy_id():
+    from app.legacy_import import validate_mapping
+
+    legacy_rows = [
+        {"id": 2, "title": "The Matrix"},
+        {"id": 4, "title": "The Cannonball Run"},
+    ]
+
+    mapping_rows = [
+        {
+            "legacy_id": "2",
+            "tmdb_id": "603",
+            "original_title": "The Matrix",
+            "title": "The Matrix",
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="CSV mappings do not match SQLite movie IDs",
+    ):
+        validate_mapping(legacy_rows, mapping_rows)
+
+
+def test_validate_mapping_rejects_extra_legacy_id():
+    from app.legacy_import import validate_mapping
+
+    legacy_rows = [
+        {"id": 2, "title": "The Matrix"},
+    ]
+
+    mapping_rows = [
+        {
+            "legacy_id": "2",
+            "tmdb_id": "603",
+            "original_title": "The Matrix",
+            "title": "The Matrix",
+        },
+        {
+            "legacy_id": "999",
+            "tmdb_id": "123456",
+            "original_title": "Unknown Movie",
+            "title": "Unknown Movie",
+        },
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="CSV mappings do not match SQLite movie IDs",
+    ):
+        validate_mapping(legacy_rows, mapping_rows)
+
+
+def test_validate_mapping_rejects_duplicate_legacy_id():
+    from app.legacy_import import validate_mapping
+
+    legacy_rows = [
+        {"id": 2, "title": "The Matrix"},
+    ]
+
+    mapping_rows = [
+        {
+            "legacy_id": "2",
+            "tmdb_id": "603",
+            "original_title": "The Matrix",
+            "title": "The Matrix",
+        },
+        {
+            "legacy_id": "2",
+            "tmdb_id": "11286",
+            "original_title": "The Matrix",
+            "title": "The Matrix",
+        },
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate legacy_id found in CSV",
+    ):
+        validate_mapping(legacy_rows, mapping_rows)
+
+
+def test_validate_mapping_rejects_duplicate_tmdb_id():
+    from app.legacy_import import validate_mapping
+
+    legacy_rows = [
+        {"id": 2, "title": "The Matrix"},
+        {"id": 4, "title": "The Cannonball Run"},
+    ]
+
+    mapping_rows = [
+        {
+            "legacy_id": "2",
+            "tmdb_id": "603",
+            "original_title": "The Matrix",
+            "title": "The Matrix",
+        },
+        {
+            "legacy_id": "4",
+            "tmdb_id": "603",
+            "original_title": "The Cannonball Run",
+            "title": "The Cannonball Run",
+        },
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate tmdb_id found in CSV",
+    ):
+        validate_mapping(legacy_rows, mapping_rows)
+
+
+def test_validate_mapping_rejects_original_title_mismatch():
+    from app.legacy_import import validate_mapping
+
+    legacy_rows = [
+        {"id": 7, "title": "기생충"},
+    ]
+
+    mapping_rows = [
+        {
+            "legacy_id": "7",
+            "tmdb_id": "496243",
+            "original_title": "The Matrix",
+            "title": "Parasite",
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="Original title mismatch for legacy ID 7",
+    ):
+        validate_mapping(legacy_rows, mapping_rows)
+
+
+@pytest.fixture
+def legacy_sqlite(tmp_path):
+    path = tmp_path / "legacy.db"
+
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(
+            """
+            CREATE TABLE movie (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                year INTEGER,
+                description TEXT,
+                rating REAL,
+                review TEXT,
+                img_url TEXT
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            INSERT INTO movie (
+                id, title, year, description,
+                rating, review, img_url
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                2,
+                "The Matrix",
+                1999,
+                "Test overview",
+                9.2,
+                "Test review",
+                "https://image.tmdb.org/t/p/w500//abc.jpg",
+            ),
+        )
+
+        connection.commit()
+
+    return path
+
+
+def test_cli_dry_run_calls_mapping_validation(monkeypatch, legacy_sqlite):
+    from app import legacy_import
+
+    def reject_mapping(legacy_rows, mapping_rows):
+        assert len(legacy_rows) > 0
+        assert len(mapping_rows) > 0
+        raise RuntimeError("Mapping validation was called")
+
+    monkeypatch.setattr(
+        legacy_import,
+        "validate_mapping",
+        reject_mapping,
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "legacy_import.py",
+            str(legacy_sqlite),
+        ],
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Mapping validation was called",
+    ):
+        legacy_import.main()
+
+
+@pytest.mark.asyncio
+async def test_insert_prepared_movies_refuses_nonempty_table(db_session):
+    existing_movie = Movie(
+        tmdb_id=999999,
+        title="Existing Movie",
+        original_title="Existing Movie",
+    )
+
+    db_session.add(existing_movie)
+    await db_session.flush()
+
+    new_record = {
+        "id": 70,
+        "tmdb_id": 900070,
+        "title": "New Movie",
+        "original_title": "New Movie",
+    }
+
+    with pytest.raises(ValueError, match="not empty"):
+        await insert_prepared_movies(db_session, [new_record])
+
+    assert await db_session.get(Movie, 70) is None
+
+
+def test_cli_reports_invalid_mapping_as_argument_error(
+    monkeypatch,
+    capsys,
+    legacy_sqlite,
+):
+    from app import legacy_import
+
+    def reject_mapping(legacy_rows, mapping_rows):
+        raise ValueError("Duplicate tmdb_id found in CSV")
+
+    monkeypatch.setattr(legacy_import, "validate_mapping", reject_mapping)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "legacy_import.py",
+            str(legacy_sqlite),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        legacy_import.main()
+
+    assert exc_info.value.code == 2
+
+    captured = capsys.readouterr()
+    assert "error: Duplicate tmdb_id found in CSV" in captured.err
+    assert "Traceback" not in captured.err
