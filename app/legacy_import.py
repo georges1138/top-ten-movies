@@ -1,6 +1,8 @@
 import argparse
+import asyncio
 import csv
 import sqlite3
+import sys
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -12,6 +14,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.db import make_engine, make_session_factory
 from app.models import Movie
 
 
@@ -159,38 +162,15 @@ def confirm_import_database(database_url: str, confirmation: str) -> str:
     return database_name
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Inspect legacy SQLite movies (import not yet implemented)"
-    )
-    parser.add_argument("sqlite_path", type=Path)
-    parser.add_argument(
-        "--execute",
-        action="store_true",
-        help="Execute the PostgreSQL import (not yet enabled)",
-    )
-    parser.add_argument(
-        "--confirm-database",
-        metavar="NAME",
-        help="Confirm the destination PostgreSQL database name",
-    )
-    args = parser.parse_args()
-
-    if args.execute:
-        if not args.confirm_database:
-            parser.error("--execute requires --confirm-database NAME")
-
-        try:
-            confirm_import_database(
-                Settings().database_url,
-                args.confirm_database,
-            )
-        except ValueError as exc:
-            parser.error(str(exc))
-
-        parser.error("PostgreSQL import execution is not yet enabled")
-
-    sqlite_uri = f"{args.sqlite_path.resolve().as_uri()}?mode=ro"
+def load_prepared_movies(
+    sqlite_path: Path,
+    mapping_path: Path,
+) -> tuple[
+    list[sqlite3.Row],
+    dict[int, dict[str, str]],
+    list[dict[str, object]],
+]:
+    sqlite_uri = f"{sqlite_path.resolve().as_uri()}?mode=ro"
 
     with closing(sqlite3.connect(sqlite_uri, uri=True)) as connection:
         connection.row_factory = sqlite3.Row
@@ -202,13 +182,89 @@ def main() -> None:
             """
         ).fetchall()
 
-    mapping_path = Path("data/legacy_tmdb_ids.csv")
-
     with mapping_path.open(newline="", encoding="utf-8") as file:
         mapping_rows = list(csv.DictReader(file))
 
+    mapping_by_id = validate_mapping(legacy_rows, mapping_rows)
+
+    prepared_movies = [
+        prepare_movie(movie, mapping_by_id[movie["id"]]) for movie in legacy_rows
+    ]
+
+    return legacy_rows, mapping_by_id, prepared_movies
+
+
+async def run_import(
+    sqlite_path: Path,
+    mapping_path: Path,
+    database_url: str,
+) -> None:
+    _, _, prepared_movies = load_prepared_movies(
+        sqlite_path,
+        mapping_path,
+    )
+
+    engine = make_engine(database_url)
+
     try:
-        mapping_by_id = validate_mapping(legacy_rows, mapping_rows)
+        session_factory = make_session_factory(engine)
+        await import_prepared_movies(session_factory, prepared_movies)
+    finally:
+        await engine.dispose()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Inspect or import legacy SQLite movies into PostgreSQL"
+    )
+    parser.add_argument("sqlite_path", type=Path)
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Execute the PostgreSQL import",
+    )
+    parser.add_argument(
+        "--confirm-database",
+        metavar="NAME",
+        help="Confirm the destination PostgreSQL database name",
+    )
+    args = parser.parse_args()
+
+    mapping_path = Path("data/legacy_tmdb_ids.csv")
+
+    if args.execute:
+        if not args.confirm_database:
+            parser.error("--execute requires --confirm-database NAME")
+
+        database_url = Settings().database_url
+
+        try:
+            confirm_import_database(database_url, args.confirm_database)
+        except ValueError as exc:
+            parser.error(str(exc))
+
+        try:
+            asyncio.run(
+                run_import(
+                    args.sqlite_path,
+                    mapping_path,
+                    database_url,
+                ),
+                loop_factory=(
+                    asyncio.SelectorEventLoop if sys.platform == "win32" else None
+                ),
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+
+        print("PostgreSQL import completed successfully.")
+        return
+
+    try:
+        legacy_rows, mapping_by_id, prepared_movies = load_prepared_movies(
+            args.sqlite_path,
+            mapping_path,
+        )
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -226,12 +282,6 @@ def main() -> None:
             f"-> {mapping['title']} "
             f"(TMDB {mapping['tmdb_id']})"
         )
-
-    prepared_movies = []
-
-    for movie in legacy_rows:
-        mapping = mapping_by_id[movie["id"]]
-        prepared_movies.append(prepare_movie(movie, mapping))
 
     print(f"Prepared {len(prepared_movies)} movie identities (preview only).")
 

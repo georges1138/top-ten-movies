@@ -4,10 +4,12 @@ import sys
 from contextlib import closing
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import delete, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 from app.config import Settings
@@ -22,6 +24,7 @@ from app.legacy_import import (
     prepare_movie,
     require_empty_movies,
     reset_movie_id_sequence,
+    run_import,
     validate_import_database,
 )
 from app.models import Movie
@@ -545,13 +548,22 @@ def test_cli_rejects_confirmation_mismatch_with_allowed_target(monkeypatch, caps
     assert "Database confirmation does not match destination" in capsys.readouterr().err
 
 
-def test_cli_correct_confirmation_still_blocks_execution(monkeypatch, capsys):
+def test_cli_correct_confirmation_calls_run_import(monkeypatch, capsys):
     from app import legacy_import
+
+    monkeypatch.setattr(legacy_import.sys, "platform", "win32")
+    database_url = "postgresql+psycopg://user:password@localhost/movies_dev"
 
     class FakeSettings:
         database_url = "postgresql+psycopg://user:password@localhost/movies_dev"
 
+    calls = []
+
+    async def fake_run_import(sqlite_path, mapping_path, url):
+        calls.append((sqlite_path, mapping_path, url))
+
     monkeypatch.setattr(legacy_import, "Settings", FakeSettings)
+    monkeypatch.setattr(legacy_import, "run_import", fake_run_import)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -564,11 +576,25 @@ def test_cli_correct_confirmation_still_blocks_execution(monkeypatch, capsys):
         ],
     )
 
-    with pytest.raises(SystemExit) as exc_info:
+    with patch(
+        "app.legacy_import.asyncio.run",
+        wraps=legacy_import.asyncio.run,
+    ) as run_spy:
         legacy_import.main()
 
-    assert exc_info.value.code == 2
-    assert "PostgreSQL import execution is not yet enabled" in capsys.readouterr().err
+    assert (
+        run_spy.call_args.kwargs["loop_factory"]
+        is legacy_import.asyncio.SelectorEventLoop
+    )
+
+    assert calls == [
+        (
+            Path("instance/top-ten-movies.db"),
+            Path("data/legacy_tmdb_ids.csv"),
+            database_url,
+        )
+    ]
+    assert "PostgreSQL import completed successfully." in capsys.readouterr().out
 
 
 def test_validate_mapping_rejects_missing_legacy_id():
@@ -831,3 +857,78 @@ def test_cli_reports_invalid_mapping_as_argument_error(
     captured = capsys.readouterr()
     assert "error: Duplicate tmdb_id found in CSV" in captured.err
     assert "Traceback" not in captured.err
+
+
+@pytest.mark.asyncio
+async def test_run_import_preserves_movie_data_and_refuses_second_import(
+    legacy_sqlite,
+    tmp_path,
+):
+    mapping_path = tmp_path / "mapping.csv"
+    mapping_path.write_text(
+        "legacy_id,tmdb_id,original_title,title\n2,603,The Matrix,The Matrix\n",
+        encoding="utf-8",
+    )
+
+    database_url = Settings().database_url
+    url = make_url(database_url)
+
+    if url.drivername != "postgresql+psycopg" or url.database != "movies_test":
+        raise RuntimeError(
+            "End-to-end import test requires the PostgreSQL movies_test database"
+        )
+
+    engine = make_engine(database_url)
+    session_factory = make_session_factory(engine)
+    imported = False
+
+    try:
+        await run_import(legacy_sqlite, mapping_path, database_url)
+        imported = True
+
+        # Use a fresh session to prove the import was committed.
+        async with session_factory() as session:
+            movie = await session.get(Movie, 2)
+
+            assert movie is not None
+            assert movie.tmdb_id == 603
+            assert movie.title == "The Matrix"
+            assert movie.original_title == "The Matrix"
+            assert movie.year == 1999
+            assert movie.overview == "Test overview"
+            assert movie.review == "Test review"
+            assert movie.rating == Decimal("9.2")
+            assert movie.poster_path == "/abc.jpg"
+            assert movie.created_at == legacy_created_at(2)
+
+        # Verify the next automatically generated ID follows the imported ID.
+        async with session_factory() as session:
+            async with session.begin():
+                next_id = await session.scalar(
+                    text("SELECT nextval(pg_get_serial_sequence('movies', 'id'))")
+                )
+
+                assert next_id == 3
+
+        # A second import must not overwrite existing movies.
+        with pytest.raises(ValueError, match="not empty"):
+            await run_import(legacy_sqlite, mapping_path, database_url)
+
+        async with session_factory() as session:
+            movies = (await session.scalars(select(Movie))).all()
+            assert len(movies) == 1
+            assert movies[0].tmdb_id == 603
+
+    finally:
+        try:
+            if imported:
+                async with session_factory() as session:
+                    async with session.begin():
+                        await session.execute(
+                            delete(Movie).where(
+                                Movie.id == 2,
+                                Movie.tmdb_id == 603,
+                            )
+                        )
+        finally:
+            await engine.dispose()
