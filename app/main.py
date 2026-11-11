@@ -1,3 +1,4 @@
+from app.tmdb.client import TMDBClient
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,10 +19,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings if settings is not None else Settings()
         app.state.engine = make_engine(app.state.settings.database_url)
         app.state.session_factory = make_session_factory(app.state.engine)
+
+        app.state.tmdb_client = TMDBClient(
+            token=app.state.settings.tmdb_read_token.get_secret_value()
+        )
+
         try:
             yield
         finally:
-            await app.state.engine.dispose()
+            try:
+                await app.state.tmdb_client.aclose()
+            finally:
+                await app.state.engine.dispose()
+
 
     app = FastAPI(
         title="Top Ten Movies",

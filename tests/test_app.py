@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -94,3 +96,44 @@ def test_invalid_tmdb_token_rejected(monkeypatch, tmp_path, invalid_token):
             pass
 
     assert exc_info.value.errors()[0]["loc"] == ("tmdb_read_token",)
+
+
+def test_tmdb_client_is_closed_once_on_shutdown():
+    settings = Settings(
+        secret_key="a" * 32,
+        tmdb_read_token="fake-test-token",
+        database_url="postgresql+psycopg://test:test@localhost:5432/test_movies",
+        _env_file=None,
+    )
+
+    with patch("app.main.TMDBClient") as mock_client_class:
+        mock_tmdb_client = mock_client_class.return_value
+        mock_tmdb_client.aclose = AsyncMock()
+
+        app = create_app(settings)
+
+        with TestClient(app) as client:
+            assert app.state.tmdb_client is mock_tmdb_client
+            assert client.get("/healthz").status_code == 200
+
+        mock_client_class.assert_called_once_with(token="fake-test-token")
+        mock_tmdb_client.aclose.assert_awaited_once()
+
+
+def test_get_tmdb_client_returns_shared_instance():
+    from unittest.mock import MagicMock
+
+    from starlette.requests import Request
+
+    from app.tmdb.dependencies import get_tmdb_client
+
+    shared_client = MagicMock()
+    app = MagicMock()
+    app.state.tmdb_client = shared_client
+
+    request = MagicMock(spec=Request)
+    request.app = app
+
+    result = get_tmdb_client(request)
+
+    assert result is shared_client
