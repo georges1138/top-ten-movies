@@ -337,3 +337,45 @@ async def test_requests_have_explicit_timeouts():
         "write": 5.0,
         "pool": 5.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_get_movie_requests_english_details_with_bearer_auth():
+    token = "secret-test-token"
+    captured_requests = []
+
+    def fake_tmdb(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": 496243,
+                "title": "Parasite",
+                "original_title": "기생충",
+                "release_date": "2019-05-30",
+                "overview": "A Korean thriller.",
+                "poster_path": "/poster.jpg",
+            },
+        )
+
+    client = TMDBClient(
+        token=token,
+        transport=httpx.MockTransport(fake_tmdb),
+    )
+
+    try:
+        movie = await client.get_movie(496243)
+    finally:
+        await client.aclose()
+
+    assert len(captured_requests) == 1
+
+    request = captured_requests[0]
+
+    assert request.url.path == "/3/movie/496243"
+    assert request.url.params["language"] == "en-US"
+    assert request.headers["Authorization"] == f"Bearer {token}"
+    assert token not in str(request.url)
+
+    assert movie.title == "Parasite"
+    assert movie.original_title == "기생충"
