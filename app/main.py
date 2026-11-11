@@ -1,4 +1,3 @@
-from app.tmdb.client import TMDBClient
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import Settings
 from app.db import make_engine, make_session_factory
-
+from app.tmdb.client import TMDBClient
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -31,7 +30,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await app.state.tmdb_client.aclose()
             finally:
                 await app.state.engine.dispose()
-
 
     app = FastAPI(
         title="Top Ten Movies",
