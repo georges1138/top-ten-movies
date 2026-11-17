@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -137,3 +138,39 @@ def test_get_tmdb_client_returns_shared_instance():
     result = get_tmdb_client(request)
 
     assert result is shared_client
+
+
+def test_session_persists_across_requests():
+    """Verify session data survives between requests."""
+    settings = Settings(
+        secret_key="a" * 32,
+        tmdb_read_token="fake-test-token",
+        database_url="postgresql+psycopg://test:test@localhost:5432/test_movies",
+        _env_file=None,
+    )
+
+    app = create_app(settings)
+
+    @app.get("/test-session-set")
+    async def set_session(request: Request):
+        request.session["user_id"] = 123
+        return {"session_set": True}
+
+    @app.get("/test-session-get")
+    async def get_session(request: Request):
+        return {"user_id": request.session.get("user_id")}
+
+    with TestClient(app, base_url="https://testserver") as client:
+        set_response = client.get("/test-session-set")
+        assert set_response.status_code == 200
+
+        session_cookie = set_response.headers["set-cookie"]
+
+        assert "top_ten_movies_session=" in session_cookie
+        assert "httponly" in session_cookie.lower()
+        assert "secure" in session_cookie.lower()
+        assert "samesite=lax" in session_cookie.lower()
+
+        get_response = client.get("/test-session-get")
+        assert get_response.status_code == 200
+        assert get_response.json() == {"user_id": 123}
