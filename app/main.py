@@ -2,15 +2,17 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from secrets import compare_digest, token_urlsafe
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import authenticate_admin
 from app.config import Settings
-from app.db import make_engine, make_session_factory
+from app.db import get_session, make_engine, make_session_factory
+from app.models import User
 from app.tmdb.client import TMDBClient
 
 APP_DIR = Path(__file__).resolve().parent
@@ -38,6 +40,43 @@ def validate_csrf_token(request: Request, submitted_token: str) -> bool:
         return False
 
     return compare_digest(expected_token, submitted_token)
+
+
+def require_csrf(
+    request: Request,
+    csrf_token: str | None = Form(None),
+) -> None:
+    """Reject requests without a valid session-bound CSRF token."""
+    if not isinstance(csrf_token, str) or not validate_csrf_token(request, csrf_token):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid CSRF token",
+        )
+
+
+async def require_admin(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """Require an administrator who still exists in the database."""
+    user_id = request.session.get("user_id")
+
+    if user_id is None:
+        raise HTTPException(
+            status_code=303,
+            headers={"Location": "/login"},
+        )
+
+    user = await session.get(User, user_id)
+
+    if user is None:
+        request.session.clear()
+        raise HTTPException(
+            status_code=303,
+            headers={"Location": "/login"},
+        )
+
+    return user
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -90,13 +129,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/admin")
-    async def admin_dashboard(request: Request):
-        if "user_id" not in request.session:
-            return RedirectResponse(
-                url="/login",
-                status_code=303,
-            )
-
+    async def admin_dashboard(
+        admin: User = Depends(require_admin),
+    ):
         return {"message": "Welcome to the admin dashboard"}
 
     @app.get("/login")
@@ -109,22 +144,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"csrf_token": csrf_token},
         )
 
-    @app.post("/login")
+    @app.post("/login", dependencies=[Depends(require_csrf)])
     async def admin_login(
         request: Request,
         username: str = Form(...),
         password: str = Form(...),
-        csrf_token: str | None = Form(None),
     ):
-
-        if not isinstance(csrf_token, str) or not validate_csrf_token(
-            request, csrf_token
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="Invalid CSRF token",
-            )
-
         async with request.app.state.session_factory() as session:
             user = await authenticate_admin(
                 session,
@@ -147,7 +172,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status_code=303,
         )
 
-    @app.post("/logout")
+    @app.post("/logout", dependencies=[Depends(require_csrf)])
     async def admin_logout(request: Request):
         request.session.clear()
         return RedirectResponse(
